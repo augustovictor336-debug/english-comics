@@ -43,58 +43,99 @@ function learnedIds() { return Object.keys(S.words).filter(id => S.words[id].st 
 function needsReview(id) { const w = S.words[id]; return !!w && w.st !== "new" && (w.due <= Date.now() || w.bad > w.ok); }
 function reviewIds() { return Object.keys(S.words).filter(id => getWord(id) && needsReview(id)).sort((a, b) => S.words[a].due - S.words[b].due); }
 
-/* ───────── Armazenamento (conta claude.ai via db; navegador como reserva) ───────── */
+/* ───────── Armazenamento (conta claude.ai via db; navegador como reserva) ─────────
+   Vários perfis na mesma conta/navegador. O perfil "p1" usa as chaves originais
+   (localStorage LSK e documentos "state"/"convs"), então o progresso antigo continua intacto. */
 const Store = {
-  mode: "local", ref: null, convRef: null, timer: null, saving: false,
-  loadLocal() {
-    try { const raw = localStorage.getItem(LSK); if (raw) return JSON.parse(raw); } catch (e) { }
+  mode: "local", col: null, timer: null, saving: false, idx: null,
+  key(id) { return id === "p1" ? LSK : LSK + ":" + id; },
+  doc(id, kind) { return this.col.doc(id === "p1" ? kind : kind + "-" + id); },
+  active() { return this.idx ? this.idx.active : "p1"; },
+  loadIdx() { try { const r = localStorage.getItem(LSK + ":profiles"); if (r) return JSON.parse(r); } catch (e) { } return null; },
+  loadLocal(id = "p1") {
+    try { const raw = localStorage.getItem(this.key(id)); if (raw) return JSON.parse(raw); } catch (e) { }
     return null;
   },
   async init() {
-    const local = this.loadLocal();
-    if (local && local.v === 1) S = Object.assign(freshState(), local);
+    this.idx = this.loadIdx();
     const db = await cap("db");
     const user = await cap("user");
     if (db && user && user.id) {
       try {
         const uid = await user.id();
-        const col = db.collection("data/users/" + uid);
-        this.ref = col.doc("state");
-        this.convRef = col.doc("convs");
-        const remote = unwrap(await withTimeout(this.ref.get(), 10000));
-        const convs = unwrap(await withTimeout(this.convRef.get(), 10000).catch(() => null));
+        this.col = db.collection("data/users/" + uid);
+        const r = unwrap(await withTimeout(this.col.doc("profiles").get(), 10000));
         this.mode = "cloud";
-        let pushLocal = !remote;
-        if (remote && remote.json) {
-          const r = JSON.parse(remote.json);
-          if (!local || (r.updated || 0) >= (local.updated || 0)) S = Object.assign(freshState(), r);
-          else pushLocal = true;
-        }
-        if (convs && convs.json) { try { const c = JSON.parse(convs.json); if (Array.isArray(c) && c.length >= (S.convs || []).length) S.convs = c; } catch (e) { } }
-        if (!S.profile.name && user.me) {
-          try { const me = await user.me(); if (me && me.name) S.profile.name = me.name.split(" ")[0]; } catch (e) { }
-        }
-        if (pushLocal) this.save(true);
-      } catch (e) { this.mode = "local"; this.ref = null; }
+        if (r && r.json) { const ri = JSON.parse(r.json); if (!this.idx || (ri.updated || 0) >= (this.idx.updated || 0)) this.idx = ri; }
+      } catch (e) { this.mode = "local"; this.col = null; }
+    }
+    if (!this.idx) {
+      /* primeira vez com perfis: o progresso existente vira o primeiro perfil */
+      this.idx = { active: "p1", updated: 0, list: [{ id: "p1", name: "" }] };
+      await this.loadProfile("p1");
+      if (!S.profile.name && user && user.me) { try { const me = await user.me(); if (me && me.name) S.profile.name = me.name.split(" ")[0]; } catch (e) { } }
+      this.idx.list[0].name = S.profile.name || "Perfil 1";
+      if (S.profile.onboarded && !this.idx.list.some(p => /let[ií]cia/i.test(p.name))) this.idx.list.push({ id: "p-leticia", name: "Leticia" });
+      this.saveIdx();
+    } else {
+      if (!this.idx.list.some(p => p.id === this.idx.active)) this.idx.active = this.idx.list[0].id;
+      await this.loadProfile(this.active());
     }
     setSync();
+  },
+  async loadProfile(id) {
+    const local = this.loadLocal(id);
+    let st = local && local.v === 1 ? local : null, push = false;
+    if (this.mode === "cloud") {
+      try {
+        const remote = unwrap(await withTimeout(this.doc(id, "state").get(), 10000));
+        if (remote && remote.json) { const r = JSON.parse(remote.json); if (!st || (r.updated || 0) >= (st.updated || 0)) st = r; else push = true; }
+        else push = !!st;
+        const convs = unwrap(await withTimeout(this.doc(id, "convs").get(), 10000).catch(() => null));
+        if (st && convs && convs.json) { try { const c = JSON.parse(convs.json); if (Array.isArray(c) && c.length >= (st.convs || []).length) st.convs = c; } catch (e) { } }
+      } catch (e) { this.mode = "local"; }
+    }
+    S = Object.assign(freshState(), st || {});
+    const p = this.idx && this.idx.list.find(x => x.id === id);
+    if (p && !S.profile.name && id !== "p1") S.profile.name = p.name;
+    if (push) this.save(true);
+  },
+  saveIdx() {
+    this.idx.updated = Date.now();
+    try { localStorage.setItem(LSK + ":profiles", JSON.stringify(this.idx)); } catch (e) { }
+    if (this.mode === "cloud" && this.col) this.col.doc("profiles").set({ json: JSON.stringify(this.idx), updated: this.idx.updated }).catch(() => setSync("err"));
   },
   save(now) {
     S.updated = Date.now();
     clearTimeout(this.timer);
+    const id = this.active();
     const run = () => {
       const st = Object.assign({}, S, { convs: [] });
-      try { localStorage.setItem(LSK, JSON.stringify(S)); } catch (e) { }
-      if (this.mode === "cloud" && this.ref) {
+      try { localStorage.setItem(this.key(id), JSON.stringify(S)); } catch (e) { }
+      const p = this.idx && this.idx.list.find(x => x.id === id);
+      if (p && S.profile.name && p.name !== S.profile.name) { p.name = S.profile.name; this.saveIdx(); }
+      if (this.mode === "cloud" && this.col) {
         this.saving = true; setSync();
         Promise.all([
-          this.ref.set({ json: JSON.stringify(st), updated: S.updated }),
-          this.convRef.set({ json: JSON.stringify(S.convs.slice(-20)), updated: S.updated })
+          this.doc(id, "state").set({ json: JSON.stringify(st), updated: S.updated }),
+          this.doc(id, "convs").set({ json: JSON.stringify(S.convs.slice(-20)), updated: S.updated })
         ]).then(() => { this.saving = false; setSync(); })
           .catch(() => { this.saving = false; setSync("err"); });
       }
     };
     if (now) run(); else this.timer = setTimeout(run, 900);
+  },
+  async switchTo(id) {
+    if (id === this.active()) return;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; this.save(true); }
+    this.idx.active = id; this.saveIdx();
+    await this.loadProfile(id);
+  },
+  async create(name) {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; this.save(true); }
+    const id = "p" + Date.now().toString(36);
+    this.idx.list.push({ id, name }); this.idx.active = id; this.saveIdx();
+    S = freshState(); S.profile.name = name; this.save(true);
   }
 };
 function unwrap(r) {
@@ -105,8 +146,10 @@ function unwrap(r) {
   return r;
 }
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]); }
+let claudeReady = null;
 async function cap(name) {
-  for (let i = 0; i < 15 && !(window.claude && window.claude.use); i++) await new Promise(r => setTimeout(r, 100));
+  if (!claudeReady) claudeReady = (async () => { for (let i = 0; i < 15 && !(window.claude && window.claude.use); i++) await new Promise(r => setTimeout(r, 100)); })();
+  await claudeReady;
   if (!(window.claude && window.claude.use)) return null;
   try { return await withTimeout(window.claude.use(name), 11000); } catch (e) { return null; }
 }

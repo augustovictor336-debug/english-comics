@@ -14,6 +14,7 @@ Plataforma de estudo de inglês com visual de história em quadrinhos. O aluno a
 - **Conversação com IA:** 8 situações reais, com correção e explicação em português (precisa de backend, veja abaixo).
 - **Revisão inteligente:** flashcards com repetição espaçada (1, 3, 7, 14, 30 e 60 dias), palavras difíceis e erros recentes.
 - **Meu progresso:** gráficos semanais e mensais, acertos por modalidade, histórico e relatório semanal.
+- **Perfis:** vários alunos no mesmo navegador ou na mesma conta, cada um com nível, palavras, XP, conquistas e conversas próprios.
 - **Conquistas:** XP, níveis, personagem que evolui, medalhas, desafios diários, metas semanais e ranking pessoal.
 
 ## Como rodar

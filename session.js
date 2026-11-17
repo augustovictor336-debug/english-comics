@@ -119,7 +119,7 @@ function startSession(opts) {
   renderQ();
 }
 function closeSession(force) {
-  if (!force && SS && SS.i < SS.qs.length && SS.done > 0) {
+  if (!force && SS && SS.qs && SS.i < SS.qs.length && SS.done > 0) {
     $("#sheet").insertAdjacentHTML("beforeend", `<div class="fb info" id="confirm-close"><b>Sair da sessão?</b><p class="small">Seu progresso nas questões respondidas já foi salvo.</p><div class="row"><button class="btn sm r" data-act="session-close-force">Sair</button><button class="btn sm" data-act="dismiss-confirm">Continuar</button></div></div>`);
     return;
   }

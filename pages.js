@@ -23,7 +23,9 @@ function refreshChrome() {
   $("#bnav").innerHTML = main.map(id => { const r = ROUTES.find(x => x.id === id); return `<a href="#${id}" class="${id === cur ? "on" : ""}">${icon(r.ic)}<span>${r.t.split(" ")[0]}</span></a>`; }).join("") +
     `<button data-act="more" class="${main.includes(cur) ? "" : "on"}" aria-label="Mais páginas">${icon("more")}<span>Mais</span></button>`;
   $("#more").innerHTML = ROUTES.filter(r => !main.includes(r.id)).map(r => `<a href="#${r.id}">${icon(r.ic)}${r.t}</a>`).join("");
-  $("#mob-xp").textContent = `${S.xp} XP · Nv ${playerLevel()}`;
+  const nm = S.profile.name || "Perfil";
+  $("#mob-xp").textContent = `${nm} · ${S.xp} XP`;
+  $("#prof").innerHTML = `<span class="ini" aria-hidden="true">${esc(nm[0].toUpperCase())}</span><span style="flex:1;min-width:0"><b>${esc(nm)}</b><span>${Store.idx && Store.idx.list.length > 1 ? "Trocar de perfil" : "Perfis"}</span></span>`;
 }
 function render() {
   refreshChrome();
@@ -41,7 +43,7 @@ function pOnboard() {
     <span class="caption r">BEM-VINDO AO ENGLISH COMICS</span>
     <h1>Your English Adventure Starts Here!</h1>
     <p class="lead">Aprenda pelo menos 15 palavras por semana, descubra como usá-las, construa frases e converse em inglês com um professor de IA.</p>
-    <div class="field" style="max-width:380px"><label for="ob-name">Como você quer ser chamado?</label><input class="input" id="ob-name" value="${esc(S.profile.name)}" placeholder="Seu nome" autocomplete="given-name"></div>
+    <div class="field" style="max-width:380px"><label for="ob-name">Como você quer ser chamado?</label><input class="input" id="ob-name" value="${esc(S.profile.name || OB.name || "")}" placeholder="Seu nome" autocomplete="given-name"></div>
     <div class="row"><button class="btn n big" data-act="ob-start">FAZER TESTE DE NIVELAMENTO</button><button class="btn" data-act="ob-skip">Sou iniciante, pular teste</button></div>
     <p class="small">O teste tem ${D.PLACEMENT.length} perguntas rápidas e define seu nível inicial. Você pode mudar o nível depois no seu perfil.</p></div></div>`;
   if (OB.step === 1) {
@@ -541,13 +543,50 @@ function pProfile() {
       <p>${Store.mode === "cloud" ? "Seu progresso fica salvo na sua conta do claude.ai e continua de onde parou em qualquer dispositivo." : (window.claude ? "Seu progresso está salvo apenas neste navegador. Abra a página logado no claude.ai para salvar na sua conta." : "Seu progresso fica salvo neste navegador. Para usar em outro aparelho, continue estudando no mesmo navegador.")}</p>
       <div class="stack small"><span>Palavras estudadas: <b class="num">${Object.keys(S.words).length}</b> · Favoritas: <b class="num">${S.fav.length}</b></span><span>Semanas: <b class="num">${S.weeks.length}</b> · Conversas: <b class="num">${S.convs.length}</b> · Sessões: <b class="num">${S.sessions}</b></span>
       <span>Professor de IA: <b>${AI.ok() ? "conectado" : "configuração pendente"}</b> · Áudio: <b>${Voice.can() ? "disponível" : "indisponível"}</b> · Microfone: <b>${Voice.d ? "disponível" : "indisponível"}</b></span></div>
-      ${RESETQ ? `<div class="fb bad"><b>Apagar todo o progresso?</b><p class="small">Palavras, XP, semanas, conquistas e conversas serão apagados. Isso não pode ser desfeito.</p><div class="row"><button class="btn r sm" data-act="pf-reset-yes">Sim, apagar tudo</button><button class="btn sm" data-act="pf-reset-no">Cancelar</button></div></div>` : `<div><button class="btn r sm" data-act="pf-reset">Apagar progresso</button></div>`}
+      ${RESETQ ? `<div class="fb bad"><b>Apagar o progresso de ${esc(S.profile.name || "este perfil")}?</b><p class="small">Palavras, XP, semanas, conquistas e conversas deste perfil serão apagados. Os outros perfis não mudam. Isso não pode ser desfeito.</p><div class="row"><button class="btn r sm" data-act="pf-reset-yes">Sim, apagar tudo</button><button class="btn sm" data-act="pf-reset-no">Cancelar</button></div></div>` : `<div><button class="btn r sm" data-act="pf-reset">Apagar progresso deste perfil</button></div>`}
+      <div class="row"><span class="small" style="font-weight:700">Perfis nesta conta: ${Store.idx ? Store.idx.list.map(p => esc(p.name)).join(", ") : ""}</span><button class="btn sm" data-act="profiles">Trocar ou criar perfil</button></div>
     </div></div>`;
+}
+
+/* ───────── Perfis ───────── */
+function resetUI() {
+  VS = { tab: "week", wk: null, day: null, open: null, q: "", lv: "all", tp: "all" };
+  CV.conv = null; CV.err = ""; CV.busy = false;
+  SB = { s: 0, i: 0, state: null }; WI = { i: 0, checked: false }; PG = { wk: null };
+  OB = { step: 0, i: 0, ans: [], name: "" }; RESETQ = false; EXSRC = "week";
+}
+function openProfiles(msg) {
+  SS = { modal: true };
+  const list = Store.idx ? Store.idx.list : [];
+  $("#overlay").classList.add("open"); document.body.style.overflow = "hidden";
+  $("#sheet").innerHTML = `<div class="sheet-h"><span class="caption">QUEM VAI ESTUDAR?</span><span style="flex:1"></span><button class="btn icon-btn sm" data-act="session-close-force" aria-label="Fechar">${icon("x")}</button></div>
+  <p class="small" style="font-weight:700">Cada perfil tem o próprio nível, palavras, XP, conquistas e conversas. ${Store.mode === "cloud" ? "Todos ficam salvos na sua conta do claude.ai." : "Todos ficam salvos neste navegador."}</p>
+  <div class="stack">${list.map(p => { const on = p.id === Store.active(); return `<div class="pcard ${on ? "on" : ""}"><span class="ini" aria-hidden="true">${esc((p.name || "?")[0].toUpperCase())}</span><div class="stack" style="gap:0;flex:1"><b class="display" style="font-size:1.4rem">${esc(p.name)}</b><span class="small">${on ? `Perfil em uso · ${S.xp} XP · ${esc(S.profile.level)}` : "Toque em Entrar para continuar"}</span></div>${on ? `<span class="chip n">Em uso</span>` : `<button class="btn y" data-act="prof-switch" data-id="${esc(p.id)}">Entrar</button>`}</div>`; }).join("")}</div>
+  <div class="panel stack"><b>Novo perfil</b><div class="row"><input class="input" id="prof-new" placeholder="Nome" style="flex:1;min-width:160px" maxlength="30"><button class="btn b" data-act="prof-create">Criar perfil</button></div>${msg ? `<span class="small" style="color:#B3123F;font-weight:800">${esc(msg)}</span>` : ""}</div>`;
+}
+async function switchProfile(id) {
+  $("#sheet").innerHTML = `<div class="panel"><b>Abrindo perfil…</b> <span class="typing"><i></i><i></i><i></i></span></div>`;
+  await Store.switchTo(id);
+  resetUI(); if (S.profile.onboarded && !week()) createWeek();
+  $("#overlay").classList.remove("open"); document.body.style.overflow = ""; SS = null;
+  OB.name = S.profile.name; checkChallenges();
+  toast(`Olá, ${S.profile.name || "aluno"}!`); go("inicio");
 }
 
 /* ───────── Ações ───────── */
 const ACTS = Object.assign({}, SESSION_ACTS, {
   go: el => go(el.dataset.arg),
+  profiles: () => openProfiles(),
+  "prof-switch": el => switchProfile(el.dataset.id),
+  "prof-create": async () => {
+    const name = ($("#prof-new").value || "").trim();
+    if (!name) { openProfiles("Escreva um nome para o novo perfil."); return; }
+    if (Store.idx.list.some(p => p.name.toLowerCase() === name.toLowerCase())) { openProfiles("Já existe um perfil com esse nome."); return; }
+    await Store.create(name);
+    resetUI(); OB.name = name;
+    $("#overlay").classList.remove("open"); document.body.style.overflow = ""; SS = null;
+    toast(`Perfil de ${name} criado!`); go("inicio");
+  },
   more: () => $("#more").classList.toggle("open"),
   say: el => Voice.speak(el.dataset.text),
   "say-slow": el => Voice.speak(el.dataset.text, true),
@@ -666,7 +705,7 @@ document.addEventListener("click", e => {
 document.addEventListener("submit", e => { if (e.target.id === "cv-form") { e.preventDefault(); const i = $("#cv-in"); const v = i.value; if (CV.listening && Voice.d) Voice.d.stop().catch(() => { }); convSend(v); } });
 document.addEventListener("keydown", e => {
   if (e.target.id === "cv-in" && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#cv-form").requestSubmit(); }
-  if (e.key === "Escape" && $("#overlay").classList.contains("open")) { if (SS && SS.flash) closeSession(true); else closeSession(false); }
+  if (e.key === "Escape" && $("#overlay").classList.contains("open")) { if (SS && (SS.flash || SS.modal)) closeSession(true); else closeSession(false); }
 });
 document.addEventListener("input", e => {
   if (e.target.id === "v-q") { VS.q = e.target.value; const pos = e.target.selectionStart; render(); const n = $("#v-q"); n.focus(); n.setSelectionRange(pos, pos); }
@@ -680,13 +719,17 @@ document.addEventListener("change", e => {
 });
 
 /* ───────── Início ───────── */
+function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+function sessionStorageSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { } }
 (async function boot() {
   $("#logo-slot").innerHTML = logoSVG(); $("#logo-slot-m").innerHTML = logoSVG();
-  const local = Store.loadLocal(); if (local && local.v === 1) S = Object.assign(freshState(), local);
+  Store.idx = Store.loadIdx();
+  const local = Store.loadLocal(Store.active()); if (local && local.v === 1) S = Object.assign(freshState(), local);
   if (S.profile.onboarded && S.cur >= 0 && !week()) S.cur = S.weeks.length - 1;
   render(); setSync();
   await Promise.all([Store.init(), AI.init(), Voice.init()]);
   if (S.profile.onboarded && !week()) createWeek();
+  if (Store.idx && Store.idx.list.length > 1 && !sessionStorageGet("ec-picked")) { sessionStorageSet("ec-picked", "1"); render(); openProfiles(); return; }
   checkChallenges();
   render();
 })();
